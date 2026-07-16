@@ -1,5 +1,5 @@
-# i2tn — FTSC11 factory flasher. Interactive, no prerequisites (esptool.exe bundled).
-# (c) 2026 i2tn · https://github.com/i2tn
+# i2tn - FTSC11 factory flasher. Interactive, no prerequisites (esptool.exe bundled).
+# (c) 2026 i2tn - https://github.com/i2tn
 # Windows PowerShell 5.1+. Started by install.ps1, or directly:
 #   powershell -ExecutionPolicy Bypass -File flash.ps1
 $ErrorActionPreference = 'Stop'
@@ -19,7 +19,7 @@ function Quote([string]$s) { if ($s -match '\s') { '"' + $s + '"' } else { $s } 
 
 $esptool = Get-ChildItem -Path (Join-Path $root 'esptool') -Filter esptool.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $esptool) {
-    Write-Host "esptool.exe not found under $root\esptool — re-run the install command." -ForegroundColor Red
+    Write-Host "esptool.exe not found under $root\esptool - re-run the install command." -ForegroundColor Red
     Read-Host "Press Enter to close" | Out-Null; exit 1
 }
 
@@ -53,12 +53,17 @@ while ($true) {
     # --- firmware choice ---
     Write-Host ""
     Write-Host "Firmware:"
-    Write-Host "  [1] Board test — test page on the board's own WiFi (default)"
-    Write-Host "  [2] Production — fan controller, joins your WiFi/MQTT"
+    Write-Host "  [1] Board test - test page on the board's own WiFi (default)"
+    Write-Host "  [2] Production - fan controller, joins your WiFi/MQTT"
     $fw = if ((Read-Host "Choose [1/2]") -eq '2') { 'app' } else { 'line' }
 
     $ssid = ''; $pass = ''; $mqtt = ''
     if ($fw -eq 'app') {
+        Write-Host ""
+        Write-Host "WARNING: the production firmware has NO safety interlock for the triac." -ForegroundColor Yellow
+        Write-Host "Flash it ONLY on boards with the F2 resistor rework done, or keep mains"
+        Write-Host "and the fan disconnected. Firing on an un-reworked board damages it."
+        if ((Read-Host "Continue with the production firmware? [y/N]") -notmatch '^[yY]') { continue }
         Write-Host ""
         Write-Host "WiFi for the production firmware (leave SSID empty to skip):"
         $ssid = Read-Host "  WiFi name (SSID)"
@@ -73,14 +78,16 @@ while ($true) {
               '0x8000', (Join-Path $root 'bin\partition-table.bin'),
               '0x20000', (Join-Path $root ("bin\ftsc11-{0}.bin" -f $fw)))
     foreach ($f in $imgs[1], $imgs[3], $imgs[5]) {
-        if (-not (Test-Path $f)) { Write-Host "Missing $f — re-run the install command." -ForegroundColor Red; Read-Host "Press Enter to close" | Out-Null; exit 1 }
+        if (-not (Test-Path $f)) { Write-Host "Missing $f - re-run the install command." -ForegroundColor Red; Read-Host "Press Enter to close" | Out-Null; exit 1 }
     }
 
     $flashed = $false
     foreach ($baud in 460800, 115200) {
         Write-Host ("`nFlashing at {0} baud..." -f $baud) -ForegroundColor Cyan
+        # '4MB' MUST stay quoted: PowerShell parses a bare 4MB as the number
+        # 4194304, which esptool rejects.
         & $esptool.FullName --chip esp32 -p $port -b $baud --before default_reset --after hard_reset `
-            write_flash --flash_mode dio --flash_size 4MB --flash_freq 40m @imgs
+            write_flash --flash_mode dio --flash_size '4MB' --flash_freq 40m @imgs
         if ($LASTEXITCODE -eq 0) { $flashed = $true; break }
         Write-Host "Failed at $baud baud." -ForegroundColor Yellow
     }
@@ -119,13 +126,13 @@ while ($true) {
             Write-Host "Next steps:" -ForegroundColor Cyan
             Write-Host '  1. Power-cycle the board.'
             Write-Host '  2. On a phone/tablet/PC, join WiFi "FTSC11-XXXXXX", password: ftsc11-line'
-            Write-Host '  3. Open http://192.168.4.1 — enter the board serial, run the gates.'
+            Write-Host '  3. Open http://192.168.4.1 - enter the board serial, run the gates.'
             Write-Host '  Expected on un-reworked boards: RTD gate FAIL (flag F1), F2 question = NO.'
             Write-Host '  Report: board serial + page screenshot + JSON from http://192.168.4.1/api/state'
         } else {
             Write-Host "Production firmware flashed." -ForegroundColor Cyan
             if ($ssid) { Write-Host "  The board joins '$ssid' after power-cycle." }
-            else { Write-Host "  WiFi not set — use a serial terminal (115200): wifi <ssid> <password>" }
+            else { Write-Host "  WiFi not set - use a serial terminal (115200): wifi <ssid> <password>" }
         }
     }
 

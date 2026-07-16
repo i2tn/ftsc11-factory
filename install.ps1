@@ -1,5 +1,5 @@
-# i2tn — FTSC11 factory package: one-command install + flash (Windows).
-# (c) 2026 i2tn · https://github.com/i2tn
+# i2tn - FTSC11 factory package: one-command install + flash (Windows).
+# (c) 2026 i2tn - https://github.com/i2tn
 # Run in PowerShell:
 #   irm https://raw.githubusercontent.com/i2tn/ftsc11-factory/main/install.ps1 | iex
 # Downloads the package to %USERPROFILE%\ftsc11-factory and starts the

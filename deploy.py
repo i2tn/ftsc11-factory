@@ -90,6 +90,11 @@ def main():
         if not f.exists():
             sys.exit(f"error: missing {f} — run from the unpacked package folder")
 
+    if a.fw == "app":
+        print("WARNING: the production firmware has no triac interlock - flash it")
+        print("only on boards with the F2 resistor rework, or keep mains and the")
+        print("fan disconnected (firing damages an un-reworked board).")
+
     esptool = [sys.executable, "-m", "esptool", "--chip", "esp32"]
     if a.port:
         esptool += ["-p", a.port]

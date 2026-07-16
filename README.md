@@ -49,7 +49,7 @@ plugged into J7, then report the board.
 | Choice | What it is |
 |---|---|
 | **Board test** (default) | The board opens WiFi `FTSC11-XXXXXX` (password `ftsc11-line`); open <http://192.168.4.1>, enter the board serial, run the test gates top to bottom, one PASS/FAIL verdict per board. Low-voltage station first, then mains — detected automatically. |
-| **Production** | The fan-controller firmware. The script asks for WiFi (and optional MQTT broker) and sends it to the board over the serial cable. |
+| **Production** | The fan-controller firmware. The script asks for WiFi (and optional MQTT broker) and sends it to the board over the serial cable. **⚠ It has NO firing interlock — flash it only on boards with the F2 resistor rework done, or keep mains and the fan disconnected.** |
 
 ## Reporting results
 
