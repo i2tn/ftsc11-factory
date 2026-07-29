@@ -25,6 +25,49 @@ function Quote([string]$s) {
     '"' + ($s -replace '\\', '\\' -replace '"', '\"') + '"'
 }
 
+function Show-DriverHelp {
+    Write-Host "Install the adapter driver, then re-run:"
+    Write-Host "  CP210x: https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers"
+    Write-Host "  CH340:  https://www.wch-ic.com/downloads/CH341SER_EXE.html"
+    Write-Host "  FTDI:   https://ftdichip.com/drivers/vcp-drivers/"
+}
+
+# Enumerate COM ports WITH their device names. GetPortNames() returns bare
+# "COM3" strings, so a Bluetooth or motherboard port is indistinguishable from
+# the board - and picking the wrong one fails inside esptool with a timeout
+# that looks like broken hardware. Get-CimInstance also works on PowerShell 7,
+# where System.IO.Ports is not available at all.
+function Get-SerialPorts {
+    $list = @()
+    try {
+        $list = @(Get-CimInstance Win32_PnPEntity -ErrorAction Stop |
+            Where-Object { $_.Name -match '\(COM\d+\)' } |
+            ForEach-Object {
+                $nm = $_.Name
+                [pscustomobject]@{
+                    Port        = [regex]::Match($nm, '\((COM\d+)\)').Groups[1].Value
+                    Name        = ($nm -replace '\s*\(COM\d+\)\s*$', '')
+                    Problem     = [int]$_.ConfigManagerErrorCode
+                    IsUsbSerial = $nm -match 'CP210|CH34|FTDI|FT232|Silicon Labs|USB.*Serial|USB-SERIAL|Serial Device|CDC'
+                }
+            })
+    } catch { }
+    if ($list.Count -eq 0) {
+        # Fallback when WMI/CIM is unavailable: the registry knows the ports
+        # but not their names.
+        try {
+            $k = Get-ItemProperty 'HKLM:\HARDWARE\DEVICEMAP\SERIALCOMM' -ErrorAction Stop
+            $list = @($k.PSObject.Properties |
+                Where-Object { $_.Value -match '^COM\d+$' } |
+                ForEach-Object {
+                    [pscustomobject]@{ Port = $_.Value; Name = '(name unavailable)'
+                                       Problem = 0; IsUsbSerial = $true }
+                })
+        } catch { }
+    }
+    ,@($list | Sort-Object { [int]($_.Port -replace '\D', '') })
+}
+
 $esptool = Get-ChildItem -Path (Join-Path $root 'esptool') -Filter esptool.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $esptool) {
     Write-Host "esptool.exe not found under $root\esptool - re-run the install command." -ForegroundColor Red
@@ -39,23 +82,48 @@ while ($true) {
     Write-Host ""
 
     # --- serial port ---
-    $ports = @([System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object -Unique)
+    $ports = @(Get-SerialPorts)
     if ($ports.Count -eq 0) {
         Write-Host "No COM port found. Connect the USB-UART adapter." -ForegroundColor Red
-        Write-Host "If it never appears, install the adapter driver:"
-        Write-Host "  CP210x: https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers"
-        Write-Host "  CH340:  https://www.wch-ic.com/downloads/CH341SER_EXE.html"
+        Show-DriverHelp
         Read-Host "Press Enter to close" | Out-Null; exit 1
     }
-    if ($ports.Count -eq 1) {
-        $port = $ports[0]
-        Write-Host "Serial port: $port"
+
+    # Flag anything Windows has enumerated but not driven (yellow-bang in
+    # Device Manager) - it shows up as a port yet cannot be opened.
+    foreach ($p in $ports | Where-Object { $_.Problem -ne 0 }) {
+        Write-Host ("WARNING: {0} '{1}' has a driver problem (code {2}) - it will not open." -f `
+            $p.Port, $p.Name, $p.Problem) -ForegroundColor Yellow
+    }
+
+    $likely = @($ports | Where-Object { $_.IsUsbSerial -and $_.Problem -eq 0 })
+
+    Write-Host "Serial ports:"
+    foreach ($p in $ports) {
+        $tag = if ($p.IsUsbSerial) { "  <- USB-UART adapter" } else { "" }
+        Write-Host ("  [{0}] {1,-6} {2}{3}" -f ($ports.IndexOf($p) + 1), $p.Port, $p.Name, $tag)
+    }
+
+    if ($likely.Count -eq 1) {
+        $port = $likely[0].Port
+        Write-Host ("Using {0} ({1})." -f $port, $likely[0].Name) -ForegroundColor Green
+    } elseif ($likely.Count -eq 0) {
+        # The old code auto-picked whatever single port existed here, so a
+        # Bluetooth or motherboard COM port was silently handed to esptool and
+        # the flash failed with a confusing timeout instead of a real answer.
+        Write-Host ""
+        Write-Host "None of these look like a USB-UART adapter." -ForegroundColor Red
+        Write-Host "The board is probably not connected, or its driver is missing."
+        Show-DriverHelp
+        Write-Host ""
+        if ((Read-Host "Try one anyway? [y/N]") -notmatch '^[yY]') { continue }
+        do { $sel = Read-Host ("Pick a port [1-{0}]" -f $ports.Count) }
+        until ($sel -match '^\d+$' -and [int]$sel -ge 1 -and [int]$sel -le $ports.Count)
+        $port = $ports[[int]$sel - 1].Port
     } else {
-        Write-Host "Serial ports:"
-        for ($i = 0; $i -lt $ports.Count; $i++) { Write-Host ("  [{0}] {1}" -f ($i + 1), $ports[$i]) }
         do { $sel = Read-Host ("Pick the board's port [1-{0}]" -f $ports.Count) }
         until ($sel -match '^\d+$' -and [int]$sel -ge 1 -and [int]$sel -le $ports.Count)
-        $port = $ports[[int]$sel - 1]
+        $port = $ports[[int]$sel - 1].Port
     }
 
     # --- firmware choice ---
@@ -107,8 +175,12 @@ while ($true) {
         Write-Host "Failed at $baud baud." -ForegroundColor Yellow
     }
     if (-not $flashed) {
-        Write-Host "`nFlashing failed. Check: board powered? right COM port? cable ok?" -ForegroundColor Red
-        Write-Host "Close any other program using the port (serial monitor) and try again."
+        Write-Host "`nFlashing failed on $port." -ForegroundColor Red
+        Write-Host "  * Wrong port? Re-run and pick a different one."
+        Write-Host "  * Port busy? Close any serial monitor / Arduino IDE / PuTTY."
+        Write-Host "  * 'No serial data received' means the board never entered the"
+        Write-Host "    bootloader: hold BOOT, tap EN/RST, release BOOT, then retry."
+        Write-Host "  * Board powered, and is the USB cable a data cable (not charge-only)?"
     } else {
         Write-Host "`nFlash OK." -ForegroundColor Green
 
