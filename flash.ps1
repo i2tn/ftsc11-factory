@@ -15,7 +15,15 @@ Write-Host ''
 Write-Host 'i2tn - FTSC11 factory flasher' -ForegroundColor Cyan
 Write-Host '(c) 2026 i2tn - https://github.com/i2tn' -ForegroundColor DarkGray
 
-function Quote([string]$s) { if ($s -match '\s') { '"' + $s + '"' } else { $s } }
+# esp_console_split_argv unescapes \\, \" and "\ " inside a quoted argument,
+# so always quote and escape both metacharacters. The old "quote only if it
+# contains a space" rule silently mangled any credential holding " or \.
+# Backslashes first, then quotes, or the escapes we insert get doubled.
+# -replace replacement strings are literal (only $ is special), so '\\' emits
+# two backslashes and '\"' emits backslash-quote.
+function Quote([string]$s) {
+    '"' + ($s -replace '\\', '\\' -replace '"', '\"') + '"'
+}
 
 $esptool = Get-ChildItem -Path (Join-Path $root 'esptool') -Filter esptool.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $esptool) {
@@ -68,7 +76,12 @@ while ($true) {
         Write-Host "WiFi for the production firmware (leave SSID empty to skip):"
         $ssid = Read-Host "  WiFi name (SSID)"
         if ($ssid) {
-            $pass = Read-Host "  WiFi password"
+            $secure = Read-Host "  WiFi password" -AsSecureString
+            # PtrToStringBSTR (not ...Auto) honours the BSTR length prefix, and
+            # ZeroFreeBSTR wipes the plaintext copy from unmanaged memory.
+            $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+            try   { $pass = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+            finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
             $mqtt = Read-Host "  MQTT broker URI (optional, e.g. mqtt://192.168.1.10)"
         }
     }
@@ -84,10 +97,12 @@ while ($true) {
     $flashed = $false
     foreach ($baud in 460800, 115200) {
         Write-Host ("`nFlashing at {0} baud..." -f $baud) -ForegroundColor Cyan
-        # '4MB' MUST stay quoted: PowerShell parses a bare 4MB as the number
-        # 4194304, which esptool rejects.
-        & $esptool.FullName --chip esp32 -p $port -b $baud --before default_reset --after hard_reset `
-            write_flash --flash_mode dio --flash_size '4MB' --flash_freq 40m @imgs
+        # Hyphenated esptool v5 syntax (the underscore aliases still work but
+        # print a deprecation warning per flag, which reads as a failure to an
+        # operator). '4MB' MUST stay quoted: PowerShell parses a bare 4MB as
+        # the number 4194304, which esptool rejects.
+        & $esptool.FullName --chip esp32 -p $port -b $baud --before default-reset --after hard-reset `
+            write-flash --flash-mode dio --flash-size '4MB' --flash-freq 40m @imgs
         if ($LASTEXITCODE -eq 0) { $flashed = $true; break }
         Write-Host "Failed at $baud baud." -ForegroundColor Yellow
     }
@@ -112,7 +127,11 @@ while ($true) {
                 if ($mqtt) { $sp.WriteLine("mqtt $(Quote $mqtt)"); Start-Sleep -Seconds 1 }
                 $sp.WriteLine('status')
                 Start-Sleep -Seconds 2
-                Write-Host ($sp.ReadExisting())
+                $echo = $sp.ReadExisting()
+                if ($pass) { $echo = $echo.Replace($pass, '********') }
+                # a broker URI can embed credentials: mqtt://user:pass@host
+                if ($mqtt -and $mqtt -match '@') { $echo = $echo.Replace($mqtt, 'mqtt://********') }
+                Write-Host $echo
                 Write-Host "WiFi settings sent." -ForegroundColor Green
             } catch {
                 Write-Host ("Could not talk to the console ({0})." -f $_.Exception.Message) -ForegroundColor Yellow

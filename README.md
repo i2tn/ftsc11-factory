@@ -17,7 +17,9 @@ flash, flashes it, and (for the production firmware) asks for your WiFi name
 and password and configures the board over the same cable. At the end it
 offers to flash the next board — run it once per batch.
 
-Re-running the same command updates the package to the latest version.
+Re-running the same command updates the package to the latest version. Your
+previous copy is kept at `%USERPROFILE%\ftsc11-factory.previous`, and a
+filled-in `wifi.conf` is carried across automatically.
 For later boards you can also just run: `%USERPROFILE%\ftsc11-factory\flash.ps1`
 (right-click → Run with PowerShell).
 

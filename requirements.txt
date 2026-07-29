@@ -1,2 +1,5 @@
-esptool>=4.7
+# Pinned to the same esptool the PowerShell flow vendors (see
+# publish_github.sh ESPTOOL_VER). deploy.py uses the v5 hyphenated CLI, which
+# 4.x does not accept, so this pin is load-bearing, not hygiene.
+esptool==5.3.1
 esp-idf-nvs-partition-gen

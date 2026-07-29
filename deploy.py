@@ -14,6 +14,7 @@ Needs Python 3.8+ and `pip install -r requirements.txt`.
 WiFi/MQTT for the production firmware comes from wifi.conf next to this file.
 """
 import argparse
+import csv
 import subprocess
 import sys
 import tempfile
@@ -63,12 +64,17 @@ def run(cmd, dry=False):
 
 
 def gen_nvs(vals, out):
-    csv = out.with_suffix(".csv")
-    rows = ["key,type,encoding,value", "net,namespace,,"]
-    rows += [f"{k},data,string,{v}" for k, v in vals.items()]
-    csv.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    # csv.writer, not an f-string: credentials legitimately contain commas and
+    # quotes, and hand-joining them silently produced the wrong fields.
+    csv_path = out.with_suffix(".csv")
+    with csv_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        w.writerow(["key", "type", "encoding", "value"])
+        w.writerow(["net", "namespace", "", ""])
+        for k, v in vals.items():
+            w.writerow([k, "data", "string", v])
     run([sys.executable, "-m", "esp_idf_nvs_partition_gen", "generate",
-         str(csv), str(out), NVS_SIZE])
+         str(csv_path), str(out), NVS_SIZE])
 
 
 def main():
@@ -98,28 +104,37 @@ def main():
     esptool = [sys.executable, "-m", "esptool", "--chip", "esp32"]
     if a.port:
         esptool += ["-p", a.port]
-    esptool += ["-b", a.baud, "--before", "default_reset", "--after", "hard_reset"]
+    esptool += ["-b", a.baud, "--before", "default-reset", "--after", "hard-reset"]
 
     if a.erase_all:
-        run(esptool + ["erase_flash"], a.dry_run)
+        run(esptool + ["erase-flash"], a.dry_run)
 
     imgs = [OFF_BOOT, str(BIN / "bootloader.bin"),
             OFF_TABLE, str(BIN / "partition-table.bin"),
             OFF_APP, str(fw)]
 
     vals = read_conf(Path(a.wifi))
-    if vals:
-        nvs = Path(tempfile.mkdtemp()) / "nvs.bin"
-        gen_nvs(vals, nvs)
-        imgs = [OFF_NVS, str(nvs)] + imgs
-        print(f"WiFi/MQTT settings taken from {a.wifi}")
-    elif a.fw == "app":
-        print("note: wifi.conf is empty — production firmware will boot with "
-              "WiFi unconfigured (set it later over the serial console: "
-              "wifi <ssid> <pass>)")
+    # One scope covering generation AND flashing: gen_nvs writes the
+    # credentials to a CSV, so a failure inside it must not leak the directory.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        if vals:
+            # Writing the nvs partition replaces ALL of it, including the
+            # "params" namespace holding the user parameter blob -- so a board
+            # that was already configured comes back on FCSV05 defaults.
+            print(f"WiFi/MQTT settings taken from {a.wifi}")
+            print("note: this rewrites the nvs partition, which also resets")
+            print("      stored user parameters to defaults.")
+            nvs = Path(tmpdir) / "nvs.bin"
+            gen_nvs(vals, nvs)
+            imgs = [OFF_NVS, str(nvs)] + imgs
+        elif a.fw == "app":
+            print("note: wifi.conf is empty — production firmware will boot "
+                  "with WiFi unconfigured (set it later over the serial "
+                  "console: wifi <ssid> <pass>)")
 
-    run(esptool + ["write_flash", "--flash_mode", "dio", "--flash_size", "4MB",
-                   "--flash_freq", "40m"] + imgs, a.dry_run)
+        run(esptool + ["write-flash", "--flash-mode", "dio",
+                       "--flash-size", "4MB", "--flash-freq", "40m"] + imgs,
+            a.dry_run)
 
     print()
     if a.fw == "line":

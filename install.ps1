@@ -18,8 +18,31 @@ Invoke-WebRequest -UseBasicParsing -Uri "$repo/archive/refs/heads/main.zip" -Out
 
 $tmp = Join-Path $env:TEMP ('ftsc11-unzip-' + [guid]::NewGuid().ToString('N').Substring(0, 6))
 Expand-Archive -Path $zip -DestinationPath $tmp -Force
-if (Test-Path $dest) { Remove-Item $dest -Recurse -Force }
+# Keep one rolling backup instead of deleting outright: operators keep test
+# records and a filled-in wifi.conf in this folder, and re-running the install
+# command to update used to wipe them without asking.
+$backup = "$dest.previous"
+if (Test-Path $dest) {
+    if (Test-Path $backup) { Remove-Item $backup -Recurse -Force }
+    Move-Item $dest $backup
+    Write-Host "Previous install kept at $backup" -ForegroundColor DarkGray
+}
 Move-Item (Join-Path $tmp 'ftsc11-factory-main') $dest
+
+# Carry a filled-in wifi.conf across; the shipped one is a blank template.
+$oldConf = Join-Path $backup 'wifi.conf'
+if (Test-Path $oldConf) {
+    # Any filled-in setting counts, not just WIFI_SSID: deploy.py also accepts
+    # an MQTT-only or DEVICE_ID-only file, and deleting one of those without
+    # carrying it forward would destroy the operator's settings.
+    if (Select-String -Path $oldConf -Pattern '^\s*[A-Za-z_]+=.+' -Quiet) {
+        Copy-Item $oldConf (Join-Path $dest 'wifi.conf') -Force
+        Write-Host "Kept your existing wifi.conf." -ForegroundColor DarkGray
+    }
+    # Credentials in clear text: keep exactly one copy — the live one — rather
+    # than accumulating them in every rolling backup.
+    Remove-Item $oldConf -Force
+}
 Remove-Item $zip -Force
 Remove-Item $tmp -Recurse -Force
 Get-ChildItem $dest -Recurse | Unblock-File -ErrorAction SilentlyContinue
