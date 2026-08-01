@@ -40,8 +40,13 @@ plugged into J7, then report the board.
 
 - A Windows PC with PowerShell (any Windows 10/11).
 - A **3.3 V USB-UART adapter** with DTR and RTS wired (the board has an
-  auto-program circuit — no buttons needed). If no COM port appears, install
-  your adapter's driver:
+  auto-program circuit — no buttons needed).
+
+  > ⚠ **The board has no USB socket.** Plugging the board itself into the PC
+  > does nothing — no COM port will ever appear. The adapter goes between them:
+  > `PC --USB--> adapter --TX/RX/GND/DTR/RTS--> board programming header`
+
+  If no COM port appears, install your adapter's driver:
   [CP210x](https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers) ·
   [CH340](https://www.wch-ic.com/downloads/CH341SER_EXE.html)
 - Internet, for the one-command install.
@@ -67,7 +72,7 @@ For every tested board, report:
 
 | Problem | Check |
 |---|---|
-| No COM port | Adapter driver (links above), cable |
+| No COM port | **Is a USB-UART adapter plugged into the PC?** The board alone never shows a port. Then: adapter driver (links above), a data cable (not charge-only), another USB port. The script names any USB device Windows has no driver for, and rescans without restarting. |
 | Flashing fails | Board powered? Right port? Close other serial programs; the script auto-retries at a lower speed |
 | No `FTSC11-…` WiFi after flashing | Power-cycle; confirm "Board test" firmware was chosen |
 | Board does not boot at all | Unplug the J7 module (flag F1); if still dead, report the board |

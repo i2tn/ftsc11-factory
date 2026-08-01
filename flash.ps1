@@ -26,10 +26,24 @@ function Quote([string]$s) {
 }
 
 function Show-DriverHelp {
-    Write-Host "Install the adapter driver, then re-run:"
+    Write-Host "Install the driver for your adapter:"
     Write-Host "  CP210x: https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers"
     Write-Host "  CH340:  https://www.wch-ic.com/downloads/CH341SER_EXE.html"
     Write-Host "  FTDI:   https://ftdichip.com/drivers/vcp-drivers/"
+}
+
+# A USB-serial chip whose driver is missing has no "(COMn)" in its device name,
+# so Get-SerialPorts cannot see it at all - it lands here instead. This is the
+# only thing that tells "no adapter plugged in" apart from "driver missing",
+# which are the two ways the operator ends up with zero ports.
+function Get-DriverlessUsb {
+    try {
+        @(Get-CimInstance Win32_PnPEntity -Filter 'ConfigManagerErrorCode <> 0' -ErrorAction Stop |
+            Where-Object { $_.PNPDeviceID -like 'USB*' } |
+            ForEach-Object {
+                [pscustomobject]@{ Name = $_.Name; Problem = [int]$_.ConfigManagerErrorCode }
+            })
+    } catch { @() }
 }
 
 # Enumerate COM ports WITH their device names. GetPortNames() returns bare
@@ -65,7 +79,12 @@ function Get-SerialPorts {
                 })
         } catch { }
     }
-    ,@($list | Sort-Object { [int]($_.Port -replace '\D', '') })
+    # No leading comma here. ",@()" emits ONE object that happens to be an empty
+    # array, so with zero ports the caller saw Count=1 - a phantom blank port
+    # that skipped the "no COM port" help and offered to flash nothing. The
+    # caller already wraps this in @(), which is what stops a single port from
+    # unrolling to a scalar.
+    @($list | Sort-Object { [int]($_.Port -replace '\D', '') })
 }
 
 $esptool = Get-ChildItem -Path (Join-Path $root 'esptool') -Filter esptool.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -82,11 +101,30 @@ while ($true) {
     Write-Host ""
 
     # --- serial port ---
+    # Loop, do not exit: the usual cause is that nothing is plugged in yet, and
+    # making the operator re-run the whole installer to retry wastes a bench.
     $ports = @(Get-SerialPorts)
-    if ($ports.Count -eq 0) {
-        Write-Host "No COM port found. Connect the USB-UART adapter." -ForegroundColor Red
-        Show-DriverHelp
-        Read-Host "Press Enter to close" | Out-Null; exit 1
+    while ($ports.Count -eq 0) {
+        Write-Host "No COM port found." -ForegroundColor Red
+        Write-Host "The FTSC11 board has NO USB socket of its own - plugging the BOARD"
+        Write-Host "into the PC does nothing. It is reached through a USB-UART adapter:"
+        Write-Host "  PC --USB--> 3.3 V adapter --TX/RX/GND/DTR/RTS--> board header"
+        $bad = @(Get-DriverlessUsb)
+        if ($bad.Count -gt 0) {
+            Write-Host ""
+            Write-Host "An adapter IS plugged in, but Windows has no driver for it:" -ForegroundColor Yellow
+            foreach ($b in $bad) { Write-Host ("  {0}  (device error {1})" -f $b.Name, $b.Problem) }
+            Show-DriverHelp
+        } else {
+            Write-Host ""
+            Write-Host "Windows sees no adapter at all - check the USB cable is a data" -ForegroundColor Yellow
+            Write-Host "cable (not charge-only) and try a different USB port."
+            Show-DriverHelp
+        }
+        Write-Host ""
+        if ((Read-Host "Plug it in, then press Enter to look again (Q to quit)") -match '^[qQ]') { exit 1 }
+        Write-Host ""
+        $ports = @(Get-SerialPorts)
     }
 
     # Flag anything Windows has enumerated but not driven (yellow-bang in
