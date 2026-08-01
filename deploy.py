@@ -63,6 +63,67 @@ def run(cmd, dry=False):
         sys.exit("error: command failed (see output above)")
 
 
+NO_PORT_HELP = """\
+No USB serial adapter found.
+
+The FTSC11 board has NO USB socket of its own - plugging the BOARD into the
+PC does nothing, no port will ever appear. It is reached through a separate
+3.3 V USB-UART adapter:
+
+  PC --USB--> adapter --TX/RX/GND/DTR/RTS--> board programming header
+
+Check: adapter plugged in, a data cable (not a charge-only one), driver
+installed.
+  CP210x: https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers
+  CH340:  https://www.wch-ic.com/downloads/CH341SER_EXE.html
+  FTDI:   https://ftdichip.com/drivers/vcp-drivers/"""
+
+
+def usb_ports():
+    """Serial ports that are real USB devices.
+
+    Only USB devices report a vid, and that is the whole filter: a PC exposes
+    plenty of serial ports that can never be the board (Linux enumerates
+    /dev/ttyS0..31 whether or not anything is attached, Windows has COM1 and
+    Bluetooth ports). esptool's auto-detect walks those and fails with a
+    connection timeout, which reads as broken hardware rather than "you are
+    talking to the wrong port".
+    """
+    try:
+        from serial.tools import list_ports
+    except ImportError:
+        sys.exit("error: pyserial is missing - run: pip install -r requirements.txt")
+    return sorted(list_ports.comports(), key=lambda p: p.device)
+
+
+def pick_port(explicit):
+    if explicit:
+        return explicit
+    while True:
+        ports = [p for p in usb_ports() if p.vid is not None]
+        if len(ports) == 1:
+            print(f"Serial port: {ports[0].device} - {ports[0].description}")
+            return ports[0].device
+        if ports:
+            print("USB serial adapters:")
+            for i, p in enumerate(ports, 1):
+                print(f"  [{i}] {p.device}  {p.description}")
+            sel = input(f"Pick the board's port [1-{len(ports)}]: ").strip()
+            if sel.isdigit() and 1 <= int(sel) <= len(ports):
+                return ports[int(sel) - 1].device
+            continue
+        print(NO_PORT_HELP)
+        if sys.platform.startswith("linux"):
+            print("\nOn Linux you must also be in the 'dialout' group:")
+            print("  sudo usermod -aG dialout $USER   (then log out and back in)")
+        if not sys.stdin.isatty():
+            sys.exit("error: no adapter found (and no terminal to prompt on)")
+        if input("\nPlug it in, then press Enter to look again (q to quit): "
+                 ).strip().lower() == "q":
+            sys.exit(1)
+        print()
+
+
 def gen_nvs(vals, out):
     # csv.writer, not an f-string: credentials legitimately contain commas and
     # quotes, and hand-joining them silently produced the wrong fields.
@@ -101,10 +162,15 @@ def main():
         print("only on boards with the F2 resistor rework, or keep mains and the")
         print("fan disconnected (firing damages an un-reworked board).")
 
-    esptool = [sys.executable, "-m", "esptool", "--chip", "esp32"]
-    if a.port:
-        esptool += ["-p", a.port]
-    esptool += ["-b", a.baud, "--before", "default-reset", "--after", "hard-reset"]
+    # Always resolve a port ourselves rather than leaving esptool to auto-detect:
+    # its scan cannot tell a real adapter from the PC's own idle serial ports.
+    if a.dry_run:
+        port = a.port or "<port>"   # a dry run must not require hardware
+    else:
+        port = pick_port(a.port)
+
+    esptool = [sys.executable, "-m", "esptool", "--chip", "esp32", "-p", port,
+               "-b", a.baud, "--before", "default-reset", "--after", "hard-reset"]
 
     if a.erase_all:
         run(esptool + ["erase-flash"], a.dry_run)
